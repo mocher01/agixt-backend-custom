@@ -64,57 +64,55 @@ Required environment variables:
 - APP_URI: App URI
 """
 
-
-def send_email(email: str, subject: str, body: str):
+def send_email(email: str, subject: str, body: str) -> bool:
     try:
-        # SendGrid
-        sendgrid_api_key = getenv("SENDGRID_API_KEY")
-        sendgrid_from_email = getenv("SENDGRID_FROM_EMAIL")
-        logging.info(f"sendgrid_api_key: {sendgrid_api_key}")
-        logging.info(f"sendgrid_from_email: {sendgrid_from_email}")
-        if sendgrid_api_key and sendgrid_from_email:
-            message = Mail(
-                from_email=sendgrid_from_email,
-                to_emails=email,
-                subject=subject,
-                html_content=body,
-            )
-            try:
-                response = SendGridAPIClient(sendgrid_api_key).send(message)
-                logging.info(f"Sengrid response: {response}")
-            except Exception as e:
-                return False
-            if response.status_code != 202:
-                return False
+        # Load SMTP configuration from environment
+        smtp_server = getenv("SMTP_SERVER")
+        smtp_port = int(getenv("SMTP_PORT", "587"))
+        smtp_username = getenv("SMTP_USERNAME")
+        smtp_password = getenv("SMTP_PASSWORD")
+        smtp_from_email = getenv("SMTP_FROM_EMAIL")
+
+        logging.info("📧 SMTP email starting")
+        logging.info(f"📧 Using SMTP server: {smtp_server}")
+
+        # Ensure all required SMTP settings are present
+        if not all([smtp_server, smtp_username, smtp_password, smtp_from_email]):
+            logging.error("📧 Missing SMTP configuration.")
+            return False
+
+        # Import email modules
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        # Compose the email
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = smtp_from_email
+        msg['To'] = email
+
+        html_part = MIMEText(body, 'html')
+        msg.attach(html_part)
+
+        # Send the email
+        try:
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.send_message(msg)
+            server.quit()
+            logging.info(f"📧 Email sent to {email}")
             return True
-        # Mailgun
-        mailgun_api_key = getenv("MAILGUN_API_KEY")
-        mailgun_domain = getenv("MAILGUN_DOMAIN")
-        mailgun_from_email = getenv("MAILGUN_FROM_EMAIL")
-        if mailgun_api_key and mailgun_domain and mailgun_from_email:
-            try:
-                response = requests.post(
-                    f"https://api.mailgun.net/v3/{mailgun_domain}/messages",
-                    auth=("api", mailgun_api_key),
-                    data={
-                        "from": mailgun_from_email,
-                        "to": email,
-                        "subject": subject,
-                        "html": body,
-                    },
-                )
-            except Exception as e:
-                return False
-            if response.status_code != 200:
-                return False
-            return True
+        except Exception as e:
+            logging.error(f"📧 SMTP error: {e}")
+            return False
 
-        # None
-        return False
-    except:
+    except Exception as e:
+        logging.error(f"📧 General send_email error: {e}")
         return False
 
-
+    
 def is_admin(email: str = "USER", api_key: str = None):
     return True
 
@@ -1406,32 +1404,31 @@ class MagicalAuth:
         return user_preferences
 
     def send_email_code(self):
-        if not getenv("SENDGRID_API_KEY"):
-            return False
+        """Send email verification code using SMTP"""
         session = get_session()
-        user = session.query(User).filter(User.email == self.email).first()
-        if user is None:
-            session.close()
-            return False
-        totp = pyotp.TOTP(user.mfa_token)
-        code = totp.now()
-        app_name = getenv("APP_NAME")
         try:
-            email_send = send_email(
+            user = session.query(User).filter(User.email == self.email).first()
+            if user is None:
+                return False
+            
+            totp = pyotp.TOTP(user.mfa_token)
+            code = totp.now()
+            app_name = getenv("APP_NAME", "AGiXT")
+            
+            email_sent = send_email(
                 email=self.email,
                 subject=f"{app_name} Verification Code",
-                body=f"This code expires in 60 seconds. Your verification code is: {code}",
+                body=f"This code expires in 60 seconds. Your verification code is: {code}"
             )
+            
+            return email_sent
+            
         except Exception as e:
             logging.error(f"Error sending email code: {str(e)}")
-            session.close()
             return False
-        if not email_send:
+        finally:
             session.close()
-            return False
-        session.close()
-        return True
-
+    
     def send_sms_code(self):
         """
         Send an SMS verification code to the user's phone number
